@@ -204,60 +204,98 @@ export default async (req, context) => {
   } catch (err) {
     return new Response("Could not read uploaded files: " + err.message, { status: 400 });
   }
-
-  // ---- Call Anthropic with streaming ------------------------------
+ // ---- Call Anthropic in chunks to avoid token limits --------------
   if (!process.env.ANTHROPIC_API_KEY) {
     return new Response("Server is missing ANTHROPIC_API_KEY.", { status: 500 });
   }
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  // Build the user message: PDF as a document block, transcript as text.
-  const userContent = [
+  const meetingChunks = [
     {
-      type: "document",
-      source: { type: "base64", media_type: "application/pdf", data: agendaPdfB64 },
-      title: "short_agenda.pdf",
-      context: "Agenda packet for the meeting evening."
+      label: "Closed Session",
+      instruction: "Generate ONLY the closed_session meeting object. Return a JSON array with one object: [{...}]. No other text."
     },
     {
-      type: "text",
-      text: `transcript_with_timestamps.txt:\n\n${transcriptText}\n\nGenerate the JSON now.`
+      label: "Regular Meeting",
+      instruction: "Generate ONLY the regular_meeting object. Return a JSON array with one object: [{...}]. No other text."
+    },
+    {
+      label: "Successor Agency and other agencies",
+      instruction: "Generate ONLY the successor_agency, housing_authority, public_financing_authority, and utility_authority meeting objects (whichever occurred). Return a JSON array of objects: [{...},{...}]. No other text."
     }
   ];
 
-  // Open a streaming response back to the browser. We forward Anthropic's
-  // SSE chunks through a ReadableStream so the browser can show progress.
-  const upstream = await anthropic.messages.stream({
-    model: MODEL,
-    max_tokens: 64000,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: "user", content: userContent }]
-  });
-
   const encoder = new TextEncoder();
-  const passthrough = new ReadableStream({
+  const stream = new ReadableStream({
     async start(controller) {
+      const send = (obj) =>
+        controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+
       try {
-        for await (const event of upstream) {
-          // Forward only the events the UI cares about: text deltas + final message.
-          if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
-            controller.enqueue(encoder.encode(JSON.stringify({ t: "delta", text: event.delta.text }) + "\n"));
-          } else if (event.type === "message_delta") {
-            // Stop reason / usage updates
-            controller.enqueue(encoder.encode(JSON.stringify({ t: "meta", delta: event.delta, usage: event.usage }) + "\n"));
-          } else if (event.type === "message_stop") {
-            controller.enqueue(encoder.encode(JSON.stringify({ t: "done" }) + "\n"));
+        const allMeetings = [];
+
+        for (const chunk of meetingChunks) {
+          send({ t: "delta", text: "" }); // keep connection alive
+
+          const chunkContent = [
+            {
+              type: "document",
+              source: { type: "base64", media_type: "application/pdf", data: agendaPdfB64 },
+              title: "short_agenda.pdf",
+              context: "Agenda packet for the meeting evening."
+            },
+            {
+              type: "text",
+              text: `transcript_with_timestamps.txt:\n\n${transcriptText}\n\n${chunk.instruction}`
+            }
+          ];
+
+          const result = await anthropic.messages.create({
+            model: MODEL,
+            max_tokens: 16000,
+            system: SYSTEM_PROMPT,
+            messages: [
+              { role: "user", content: chunkContent },
+              { role: "assistant", content: "[" }
+            ]
+          });
+
+          const raw = "[" + (result.content[0]?.text ?? "").trim()
+            .replace(/\n?```\s*$/i, "").trim();
+
+          let parsed;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            send({ t: "error", message: `Failed to parse ${chunk.label} JSON: ${raw.slice(0, 200)}` });
+            controller.close();
+            return;
           }
+
+          allMeetings.push(...parsed);
+          send({ t: "progress", label: chunk.label });
         }
+
+        // Send the merged result as one delta then done
+        const finalJson = JSON.stringify({
+          meeting_date: allMeetings[0]?.meeting_date ?? "",
+          meetings: allMeetings
+        });
+
+        // Clear previous deltas and send clean final
+        send({ t: "reset" });
+        send({ t: "delta", text: finalJson });
+        send({ t: "done" });
         controller.close();
+
       } catch (err) {
-        controller.enqueue(encoder.encode(JSON.stringify({ t: "error", message: err.message }) + "\n"));
+        send({ t: "error", message: err.message });
         controller.close();
       }
     }
   });
 
-  return new Response(passthrough, {
+  return new Response(stream, {
     status: 200,
     headers: {
       "Content-Type": "application/x-ndjson; charset=utf-8",
@@ -265,7 +303,6 @@ export default async (req, context) => {
       "X-Accel-Buffering": "no"
     }
   });
-};
 
 // Netlify v2 functions config: enable streaming explicitly.
 export const config = {

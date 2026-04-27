@@ -109,16 +109,21 @@ els.form.addEventListener("submit", async (e) => {
         if (evt.t === "delta") {
           fullText += evt.text;
           chunkCount++;
-          if (chunkCount % 5 === 0) {
+            if (chunkCount % 5 === 0) {
             log(`…${fullText.length.toLocaleString()} chars received`);
           }
-        } else if (evt.t === "meta") {
-          // ignore in UI for now; available if you want to surface usage
-        } else if (evt.t === "done") {
-          log("Stream complete. Parsing JSON…");
-        } else if (evt.t === "error") {
-          throw new Error("Function reported error: " + evt.message);
-        }
+          } else if (evt.t === "reset") {
+            fullText = "";
+            chunkCount = 0;
+          } else if (evt.t === "progress") {
+            log(`✓ ${evt.label} complete`);
+          } else if (evt.t === "meta") {
+            // ignore in UI for now; available if you want to surface usage
+          } else if (evt.t === "done") {
+            log("Stream complete. Parsing JSON…");
+          } else if (evt.t === "error") {
+            throw new Error("Function reported error: " + evt.message);
+          }
       }
     }
 
