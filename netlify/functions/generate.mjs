@@ -249,14 +249,15 @@ No prose, no fences, no backticks. Start with [ and end with ].`
             max_tokens: 16000,
             system: SYSTEM_PROMPT,
             messages: [
-              { role: "user", content: chunkContent },
-              { role: "assistant", content: "[" }
+              { role: "user", content: chunkContent }
             ]
           });
 
           // Prepend the [ we used as prefill
-          const raw = "[" + (result.content[0]?.text ?? "").trim()
-            .replace(/\n?```\s*$/i, "").trim();
+          const raw = (result.content[0]?.text ?? "").trim()
+            .replace(/^```(?:json)?\s*\n?/i, "")
+            .replace(/\n?```\s*$/i, "")
+            .trim();
 
           let parsed;
           try {
