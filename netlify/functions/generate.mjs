@@ -148,7 +148,9 @@ CRITICAL RULES
   - "Approved and Adopted" / "Received and Filed" / "Approved and Adopted With Noted Amendments" — use the same standard phrases as the example.
   - Always include the [HH:MM:SS] timestamp from the transcript next to motions, votes, and major actions so a human reviewer can re-check the audio.
   - When the transcript does not clearly identify a mover or seconder, use your best inference from context AND set "uncertain": true on that motion field, so the UI can flag it for clerk review.
-  - Output JSON ONLY. No prose, no markdown fence — just the raw JSON object.`;
+  - Output JSON ONLY. No prose, no markdown, no code fences, no backticks. 
+    Do NOT start with \`\`\`json. Do NOT end with \`\`\`. 
+    Your entire response must be a single raw JSON object starting with { and ending with }.`;
 
 // --- Helper: parse user from Netlify Identity context ----------------
 
@@ -227,7 +229,7 @@ export default async (req, context) => {
   // SSE chunks through a ReadableStream so the browser can show progress.
   const upstream = await anthropic.messages.stream({
     model: MODEL,
-    max_tokens: 32000,
+    max_tokens: 64000,
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content: userContent }]
   });

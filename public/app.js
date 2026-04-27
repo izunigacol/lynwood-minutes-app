@@ -123,10 +123,9 @@ els.form.addEventListener("submit", async (e) => {
     }
 
     // Strip any accidental code-fence wrapping
-      const cleaned = fullText.trim()
-        .replace(/^```(?:json)?\s*\n?/i, "")
-        .replace(/\n?```\s*$/i, "")
-        .trim();
+     const cleaned = ("{" + fullText.trim())
+      .replace(/\n?```\s*$/i, "")
+      .trim();
 
     let data;
     try {
