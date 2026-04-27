@@ -279,6 +279,7 @@ No prose, no fences, no backticks. Start with [ and end with ].`
             allMeetings.push(meetingData);
           }
 
+          send({ t: "debug", message: `${chunk.label}: parsed ${parsed.length} meeting(s), total so far: ${allMeetings.length}` });
           send({ t: "progress", label: chunk.label });
         }
 
