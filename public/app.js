@@ -76,7 +76,7 @@ els.form.addEventListener("submit", async (e) => {
 
     log("Uploading files and starting Claude stream…");
 
-    const resp = await fetch("/api/generate", {
+    const resp = await fetch("/.netlify/functions/generate", {
       method: "POST",
       headers: { "Authorization": `Bearer ${token}` },
       body: fd
