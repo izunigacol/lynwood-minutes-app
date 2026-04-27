@@ -151,9 +151,6 @@ CRITICAL RULES
   - Output JSON ONLY. No prose, no markdown fence — just the raw JSON object.`;
 
 // --- Helper: parse user from Netlify Identity context ----------------
-function getVerifiedUser(context) {
-  return context?.clientContext?.user || null;
-}
 
 function isAllowedEmail(email) {
   const list = (process.env.ALLOWED_EMAILS || "")
@@ -166,17 +163,28 @@ function isAllowedEmail(email) {
 // Handler
 // =====================================================================
 export default async (req, context) => {
-  // ---- Auth gate ---------------------------------------------------
-  const user = getVerifiedUser(context);
-  if (!user) {
+// ---- Auth gate: read JWT from Authorization header ---------------
+  const authHeader = req.headers.get("authorization") ?? "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (!token) {
     return new Response("Unauthorized: please sign in.", { status: 401 });
   }
-  if (!isAllowedEmail(user.email)) {
-    return new Response(`Forbidden: ${user.email} is not on the allow list.`, { status: 403 });
+
+  let userEmail;
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) throw new Error("bad jwt");
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+      return new Response("Unauthorized: token expired.", { status: 401 });
+    }
+    userEmail = (payload.email ?? "").toLowerCase().trim();
+  } catch {
+    return new Response("Unauthorized: invalid token.", { status: 401 });
   }
 
-  if (req.method !== "POST") {
-    return new Response("Method not allowed.", { status: 405 });
+  if (!isAllowedEmail(userEmail)) {
+    return new Response(`Forbidden: ${userEmail} is not on the allow list.`, { status: 403 });
   }
 
   // ---- Parse multipart upload (transcript + agenda PDF) -----------
