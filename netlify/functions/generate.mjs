@@ -227,7 +227,7 @@ export default async (req, context) => {
   // SSE chunks through a ReadableStream so the browser can show progress.
   const upstream = await anthropic.messages.stream({
     model: MODEL,
-    max_tokens: 16000,
+    max_tokens: 32000,
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content: userContent }]
   });
