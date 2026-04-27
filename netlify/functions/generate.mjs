@@ -1,29 +1,8 @@
 // netlify/functions/generate.mjs
-// =====================================================================
-// Streaming proxy to Anthropic's Messages API.
-//
-// SECURITY MODEL
-//   - The Anthropic API key lives ONLY in Netlify environment variables
-//     (process.env.ANTHROPIC_API_KEY). It is never sent to the browser.
-//   - Every request must carry a valid Netlify Identity JWT. Netlify
-//     populates `context.clientContext.user` for us when the JWT is valid;
-//     we reject anything without a verified user.
-//   - In addition to Netlify Identity, we enforce a server-side email
-//     whitelist (ALLOWED_EMAILS env var) as defense in depth so a leaked
-//     Identity instance cannot be used by random new signups.
-//
-// STREAMING
-//   - Anthropic returns a server-sent-event stream. We pass it straight
-//     through to the browser using a ReadableStream so the connection
-//     stays open past Netlify's 10s sync-function ceiling.
-// =====================================================================
-
 import Anthropic from "@anthropic-ai/sdk";
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 
-// --- The system prompt. This is the "institutional knowledge" that used to
-// live in README.MD + example.pdf. Edit here to refine output style. -----
 const SYSTEM_PROMPT = `You generate Action Meeting Minutes for the Lynwood City Council in the exact style used by the Lynwood City Clerk's office.
 
 The City Council typically holds several meetings in one evening:
@@ -50,34 +29,34 @@ schema. The browser will assemble formatted Word documents from this JSON.
   "meetings": [
     {
       "type": "closed_session" | "regular_meeting" | "successor_agency" | "housing_authority" | "public_financing_authority" | "utility_authority",
-      "title": "Lynwood City Council Regular Meeting Closed Session",  // exactly as it should appear in the title block
+      "title": "Lynwood City Council Regular Meeting Closed Session",
       "called_to_order": { "time": "5:04 p.m.", "ts": "00:00:00" },
       "presiding": "Mayor Camacho",
       "agenda_certified_by": "City Clerk Quiñonez",
       "agenda_certified_ts": "00:00:07",
       "roll_call": {
-        "present": "COUNCIL MEMBERS CUELLAR, SOTO AND MAYOR CAMACHO",  // ALL CAPS, comma-separated
+        "present": "COUNCIL MEMBERS CUELLAR, SOTO AND MAYOR CAMACHO",
         "absent": "MAYOR PRO TEM AVILA-MOORE AND COUNCIL MEMBER MUNOZ-GUEVARA",
         "ts": "00:00:14",
         "remote_note": "Optional italic note explaining remote participation, or empty string"
       },
       "staff_present": "City Manager Lowenthal, City Attorney Tapia, City Clerk Quiñonez.",
-      "pledge": { "text": "led by the Lynwood Sheriff's Explorers", "ts": "00:02:50" },  // omit field if N/A
-      "invocation": { "text": "offered by City Clerk Quiñonez", "ts": "00:04:34" },     // omit if N/A
-      "presentations": [   // for regular meeting only — array of bolded-title bullets
+      "pledge": { "text": "led by the Lynwood Sheriff's Explorers", "ts": "00:02:50" },
+      "invocation": { "text": "offered by City Clerk Quiñonez", "ts": "00:04:34" },
+      "presentations": [
         { "title": "Earth Day Proclamation – Divine Hustles", "summary": "...", "ts": "00:05:25" }
       ],
-      "recess_to": [   // sub-meetings recessed into from this meeting
+      "recess_to": [
         { "name": "City of Lynwood as the Successor Agency to the Lynwood Redevelopment Agency",
           "motion": "It was moved by Council Member Cuellar, seconded by Council Member Soto to recess at 7:35 p.m.",
           "ts": "01:34:44",
           "reconvened_at": "7:36 p.m.",
           "reconvened_ts": "01:36:36" }
       ],
-      "public_oral_communications_agenda": "NONE",  // or paragraph text
-      "public_oral_communications_non_agenda": "NONE",  // or paragraph text
+      "public_oral_communications_agenda": "NONE",
+      "public_oral_communications_non_agenda": "NONE",
       "public_oral_communications_ts": "01:37:03",
-      "consent_calendar": {   // omit field if N/A
+      "consent_calendar": {
         "intro": "All matters listed under the Consent Calendar will be...",
         "pulled_items_note": "Staff pulled item 8.3 from the Consent Calendar...",
         "pulled_items_ts": "02:07:26",
@@ -93,11 +72,11 @@ schema. The browser will assemble formatted Word documents from this JSON.
             "action_left": "Approved and Adopted",
             "action_right": "RESOLUTION NO. 2026.___",
             "entitled": "A RESOLUTION OF THE CITY COUNCIL... (in ALL CAPS)",
-            "motion": null   // optional per-item motion if pulled and considered separately
+            "motion": null
           }
         ]
       },
-      "new_old_business": [   // omit field if N/A — array of items
+      "new_old_business": [
         { "number": "09.01",
           "title": "City Council Meeting Schedule for 2026",
           "motion": {
@@ -111,23 +90,23 @@ schema. The browser will assemble formatted Word documents from this JSON.
           "entitled": "A RESOLUTION..."
         }
       ],
-      "council_oral_communication": [   // for regular meeting; council reports
+      "council_oral_communication": [
         { "name": "Council Member Cuellar",
           "report": "reported attending the California Contract Cities monthly board meeting on April 15, 2026.",
           "ts": "02:28:24" }
       ],
-      "staff_oral_comments": [          // for regular meeting; staff updates
+      "staff_oral_comments": [
         { "name": "Recreation Director Mark Flores",
           "report": "announced that the Recreation Department, in collaboration with...",
           "ts": "02:51:32" }
       ],
-      "closed_session_items": [   // for closed_session meeting only
+      "closed_session_items": [
         { "label": "A.",
           "code_section": "Government Code Section 54956.9(d)(1)",
           "type": "CONFERENCE WITH LEGAL COUNSEL – EXISTING LITIGATION",
           "details": "Case Name: Castellanos v. City of Lynwood" }
       ],
-      "report_out": {   // closed_session only
+      "report_out": {
         "text": "With Council Members ... being present, staff made a presentation, City Council provided direction, and there was no reportable action.",
         "ts": "00:01:43",
         "reconvened_time": "6:01 p.m."
@@ -136,28 +115,26 @@ schema. The browser will assemble formatted Word documents from this JSON.
         "text": "the meeting was adjourned in memory of Mr. Jesus Lopez.",
         "time": "8:56 p.m.",
         "ts": "02:56:27",
-        "motion": "It was moved by Council Member Soto, seconded by Mayor Pro Tem Avila-Moore..."   // optional
+        "motion": "It was moved by Council Member Soto, seconded by Mayor Pro Tem Avila-Moore..."
       }
     }
   ]
 }
 
 CRITICAL RULES
-  - Resolution numbers: always use "RESOLUTION NO. {YEAR}.___" (with literal underscores) — the Clerk assigns the real number.
+  - Resolution numbers: always use "RESOLUTION NO. {YEAR}.___" (with literal underscores).
   - Roll call name lists must be ALL CAPS. Council variant uses "COUNCIL MEMBERS"; agency variants use "MEMBERS" (and "VICE CHAIR"/"CHAIR" instead of "MAYOR PRO TEM"/"MAYOR").
   - "Approved and Adopted" / "Received and Filed" / "Approved and Adopted With Noted Amendments" — use the same standard phrases as the example.
-  - Always include the [HH:MM:SS] timestamp from the transcript next to motions, votes, and major actions so a human reviewer can re-check the audio.
-  - When the transcript does not clearly identify a mover or seconder, use your best inference from context AND set "uncertain": true on that motion field, so the UI can flag it for clerk review.
-  - Output JSON ONLY. No prose, no markdown, no code fences, no backticks. 
-    Do NOT start with \`\`\`json. Do NOT end with \`\`\`. 
-    Your entire response must be a single raw JSON object starting with { and ending with }.`;
-
-// --- Helper: parse user from Netlify Identity context ----------------
+  - Always include the [HH:MM:SS] timestamp from the transcript next to motions, votes, and major actions.
+  - When the transcript does not clearly identify a mover or seconder, use your best inference from context AND set "uncertain": true on that motion field.
+  - Output JSON ONLY. No prose, no markdown, no code fences, no backticks.
+  - Do NOT start with \`\`\`json. Do NOT end with \`\`\`.
+  - Your entire response must be a single raw JSON array starting with [ and ending with ].`;
 
 function isAllowedEmail(email) {
   const list = (process.env.ALLOWED_EMAILS || "")
     .split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
-  if (list.length === 0) return false; // fail closed if not configured
+  if (list.length === 0) return false;
   return list.includes((email || "").toLowerCase());
 }
 
@@ -165,7 +142,8 @@ function isAllowedEmail(email) {
 // Handler
 // =====================================================================
 export default async (req, context) => {
-// ---- Auth gate: read JWT from Authorization header ---------------
+
+  // ---- Auth gate ---------------------------------------------------
   const authHeader = req.headers.get("authorization") ?? "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
   if (!token) {
@@ -189,7 +167,11 @@ export default async (req, context) => {
     return new Response(`Forbidden: ${userEmail} is not on the allow list.`, { status: 403 });
   }
 
-  // ---- Parse multipart upload (transcript + agenda PDF) -----------
+  if (req.method !== "POST") {
+    return new Response("Method not allowed.", { status: 405 });
+  }
+
+  // ---- Parse multipart upload -------------------------------------
   let transcriptText, agendaPdfB64;
   try {
     const form = await req.formData();
@@ -204,24 +186,34 @@ export default async (req, context) => {
   } catch (err) {
     return new Response("Could not read uploaded files: " + err.message, { status: 400 });
   }
- // ---- Call Anthropic in chunks to avoid token limits --------------
+
+  // ---- API key check ----------------------------------------------
   if (!process.env.ANTHROPIC_API_KEY) {
     return new Response("Server is missing ANTHROPIC_API_KEY.", { status: 500 });
   }
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+  // ---- Three chunked calls to avoid token limits ------------------
   const meetingChunks = [
     {
       label: "Closed Session",
-      instruction: "Generate ONLY the closed_session meeting object. Return a JSON array with one object: [{...}]. No other text."
+      instruction: `Generate ONLY the closed_session meeting object.
+Return a JSON array with exactly one object: [{...}].
+No prose, no fences, no backticks. Start with [ and end with ].`
     },
     {
       label: "Regular Meeting",
-      instruction: "Generate ONLY the regular_meeting object. Return a JSON array with one object: [{...}]. No other text."
+      instruction: `Generate ONLY the regular_meeting object.
+Return a JSON array with exactly one object: [{...}].
+No prose, no fences, no backticks. Start with [ and end with ].`
     },
     {
       label: "Successor Agency and other agencies",
-      instruction: "Generate ONLY the successor_agency, housing_authority, public_financing_authority, and utility_authority meeting objects (whichever occurred). Return a JSON array of objects: [{...},{...}]. No other text."
+      instruction: `Generate ONLY the successor_agency, housing_authority, public_financing_authority,
+and utility_authority meeting objects (whichever actually occurred tonight).
+Return a JSON array of those objects: [{...},{...}].
+If none occurred, return an empty array: [].
+No prose, no fences, no backticks. Start with [ and end with ].`
     }
   ];
 
@@ -233,9 +225,11 @@ export default async (req, context) => {
 
       try {
         const allMeetings = [];
+        let meetingDate = "";
 
         for (const chunk of meetingChunks) {
-          send({ t: "delta", text: "" }); // keep connection alive
+          // Send a heartbeat so the connection stays alive
+          send({ t: "delta", text: "" });
 
           const chunkContent = [
             {
@@ -260,29 +254,39 @@ export default async (req, context) => {
             ]
           });
 
+          // Prepend the [ we used as prefill
           const raw = "[" + (result.content[0]?.text ?? "").trim()
             .replace(/\n?```\s*$/i, "").trim();
 
           let parsed;
           try {
             parsed = JSON.parse(raw);
-          } catch {
-            send({ t: "error", message: `Failed to parse ${chunk.label} JSON: ${raw.slice(0, 200)}` });
+          } catch (parseErr) {
+            send({ t: "error", message: `Failed to parse ${chunk.label} JSON: ${raw.slice(0, 300)}` });
             controller.close();
             return;
           }
 
-          allMeetings.push(...parsed);
+          // Extract meeting_date from first object if present
+          if (!meetingDate && parsed[0]?.meeting_date) {
+            meetingDate = parsed[0].meeting_date;
+          }
+
+          // Each item may or may not have meeting_date; just grab the meeting data
+          for (const item of parsed) {
+            const { meeting_date, ...meetingData } = item;
+            allMeetings.push(meetingData);
+          }
+
           send({ t: "progress", label: chunk.label });
         }
 
-        // Send the merged result as one delta then done
+        // Assemble final JSON and send to browser
         const finalJson = JSON.stringify({
-          meeting_date: allMeetings[0]?.meeting_date ?? "",
+          meeting_date: meetingDate,
           meetings: allMeetings
         });
 
-        // Clear previous deltas and send clean final
         send({ t: "reset" });
         send({ t: "delta", text: finalJson });
         send({ t: "done" });
@@ -303,8 +307,9 @@ export default async (req, context) => {
       "X-Accel-Buffering": "no"
     }
   });
+};
 
-// Netlify v2 functions config: enable streaming explicitly.
+// ---- Netlify v2 config (MUST be outside the handler) ----------------
 export const config = {
   path: "/.netlify/functions/generate"
 };
