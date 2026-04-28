@@ -52,7 +52,7 @@ window.addEventListener("DOMContentLoaded", () => {
 });
 
 // ---------------------------------------------------------------------
-// Form submit -> streaming function call -> docx download
+// Form submit -> chunked function calls -> docx download
 // ---------------------------------------------------------------------
 els.form.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -70,13 +70,11 @@ els.form.addEventListener("submit", async (e) => {
 
   try {
     const fd = new FormData(els.form);
-
-    // Get a fresh JWT — Identity refreshes if needed
     const token = await user.jwt(true);
 
-    log("Uploading files and starting Claude stream…");
+    log("Uploading files and starting generation…");
 
-    const resp = await fetch("/.netlify/functions/generate", {
+    const resp = await fetch("/api/generate", {
       method: "POST",
       headers: { "Authorization": `Bearer ${token}` },
       body: fd
@@ -91,8 +89,7 @@ els.form.addEventListener("submit", async (e) => {
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    let fullText = "";
-    let chunkCount = 0;
+    let finalJson = null;
 
     while (true) {
       const { value, done } = await reader.read();
@@ -106,46 +103,40 @@ els.form.addEventListener("submit", async (e) => {
         if (!line.trim()) continue;
         let evt;
         try { evt = JSON.parse(line); } catch { continue; }
-        if (evt.t === "delta") {
-          fullText += evt.text;
-          chunkCount++;
-            if (chunkCount % 5 === 0) {
-            log(`…${fullText.length.toLocaleString()} chars received`);
-          }
-          } else if (evt.t === "reset") {
-            fullText = "";
-            chunkCount = 0;
-          } else if (evt.t === "progress") {
-            log(`✓ ${evt.label} complete`);
-          } else if (evt.t === "meta") {
-            // ignore in UI for now; available if you want to surface usage
-          } else if (evt.t === "done") {
-            log("Stream complete. Parsing JSON…");
-          } else if (evt.t === "error") {
-            throw new Error("Function reported error: " + evt.message);
-          }
+
+        if (evt.t === "heartbeat") {
+          log(`Processing: ${evt.label}…`);
+        } else if (evt.t === "progress") {
+          log(`✓ ${evt.label} complete (${evt.count} meeting(s))`);
+        } else if (evt.t === "final") {
+          // This is the complete assembled JSON from all chunks
+          finalJson = evt.json;
+          log("All sections received. Building Word documents…");
+        } else if (evt.t === "done") {
+          log("Stream complete.");
+        } else if (evt.t === "error") {
+          throw new Error("Function error: " + evt.message);
+        }
       }
     }
 
-    // Strip any accidental code-fence wrapping
-     const cleaned = ("{" + fullText.trim())
-      .replace(/\n?```\s*$/i, "")
-      .trim();
+    if (!finalJson) {
+      throw new Error("No final JSON received from server. Check function logs.");
+    }
 
     let data;
     try {
-      data = JSON.parse(cleaned);
+      data = JSON.parse(finalJson);
     } catch (err) {
-      log("ERROR: Claude's output was not valid JSON. Raw output saved as ALL.txt for review.");
-      offerDownload(new Blob([fullText], { type: "text/plain" }), "Claude_raw_output.txt");
+      log("ERROR: Could not parse assembled JSON. Saving raw for review.");
+      offerDownload(new Blob([finalJson], { type: "text/plain" }), "Claude_raw_output.txt");
       throw err;
     }
 
-    log("Building Word documents…");
     const docs = await buildAllMinutesDocs(data);
-
     docs.forEach(({ filename, blob }) => offerDownload(blob, filename));
     log(`Done. ${docs.length} document(s) ready.`);
+
   } catch (err) {
     log("ERROR: " + err.message);
     console.error(err);
