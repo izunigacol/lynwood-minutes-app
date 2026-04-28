@@ -16,11 +16,11 @@ The City Council typically holds several meetings in one evening:
 Most evenings include only some of these.
 
 You will be given two attachments:
-  - transcript_with_timestamps.txt — automated transcription of the audio
+  - A portion of transcript_with_timestamps.txt — automated transcription of the audio
   - short_agenda.pdf — the agenda packet for the evening
 Use the agenda to identify which sub-meetings were held and which numbered
-items were considered. Use the transcript to extract precise actions, times,
-movers/seconders, and vote tallies.
+items were considered. Use the transcript portion to extract precise actions, times,
+movers/seconders, and vote tallies relevant to the meeting type requested.
 
 OUTPUT FORMAT — return a JSON array (and NOTHING else) matching this schema.
 The browser will assemble formatted Word documents from this JSON.
@@ -127,7 +127,8 @@ CRITICAL RULES
   - Always include the HH:MM:SS timestamp from the transcript next to motions, votes, and major actions.
   - When the transcript does not clearly identify a mover or seconder, use your best inference AND set "uncertain": true on that motion field.
   - Output a JSON ARRAY ONLY. No prose, no markdown, no code fences, no backticks.
-  - Your entire response must start with [ and end with ].`;
+  - Your entire response must start with [ and end with ].
+  - If the relevant meeting did not occur in the transcript portion provided, return an empty array: []`;
 
 function isAllowedEmail(email) {
   const list = (process.env.ALLOWED_EMAILS || "")
@@ -136,10 +137,30 @@ function isAllowedEmail(email) {
   return list.includes((email || "").toLowerCase());
 }
 
-async function callClaude(anthropic, agendaPdfB64, transcriptText, instruction) {
+// Split transcript into N roughly equal parts, breaking on newlines
+function splitTranscript(text, parts) {
+  const chunkSize = Math.ceil(text.length / parts);
+  const result = [];
+  let start = 0;
+  for (let i = 0; i < parts; i++) {
+    if (start >= text.length) { result.push(""); continue; }
+    let end = start + chunkSize;
+    if (end < text.length) {
+      // Walk back to nearest newline so we don't cut mid-sentence
+      while (end > start && text[end] !== "\n") end--;
+    } else {
+      end = text.length;
+    }
+    result.push(text.slice(start, end).trim());
+    start = end + 1;
+  }
+  return result;
+}
+
+async function callClaude(anthropic, agendaPdfB64, transcriptPortion, partLabel, instruction) {
   const result = await anthropic.messages.create({
     model: MODEL,
-    max_tokens: 16000,
+    max_tokens: 12000,
     system: SYSTEM_PROMPT,
     messages: [{
       role: "user",
@@ -152,7 +173,7 @@ async function callClaude(anthropic, agendaPdfB64, transcriptText, instruction) 
         },
         {
           type: "text",
-          text: `transcript_with_timestamps.txt:\n\n${transcriptText}\n\n${instruction}`
+          text: `TRANSCRIPT PORTION (${partLabel} of the full recording):\n\n${transcriptPortion}\n\n${instruction}`
         }
       ]
     }]
@@ -218,42 +239,66 @@ export default async (req, context) => {
   }
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  // ---- Three sequential Claude calls ------------------------------
   try {
-    const allMeetings = [];
-    let meetingDate = "";
+    // Split transcript into 3 portions — one per Claude call
+    const [part1, part2, part3] = splitTranscript(transcriptText, 3);
 
+    console.log(`Transcript split: ${part1.length} / ${part2.length} / ${part3.length} chars`);
+
+    // Each call gets the portion of the transcript most likely to contain
+    // that meeting. Closed session is always first; agencies are always last.
     const chunks = [
       {
         label: "Closed Session",
-        instruction: `Generate ONLY the closed_session meeting object.
-Return a JSON array with exactly one object: [ { ... } ]
-Start with [ and end with ]. No prose, no code fences, no backticks.`
+        transcriptPart: part1,
+        partLabel: "Part 1 — beginning of recording",
+        instruction: `Generate ONLY the closed_session meeting object from this transcript portion.
+Return a JSON array: [ { ... } ]
+If closed session does not appear in this portion, return [].
+Start with [ and end with ]. No prose, no code fences.`
       },
       {
         label: "Regular Meeting",
-        instruction: `Generate ONLY the regular_meeting object.
-Return a JSON array with exactly one object: [ { ... } ]
-Start with [ and end with ]. No prose, no code fences, no backticks.`
+        transcriptPart: part2,
+        partLabel: "Part 2 — middle of recording",
+        instruction: `Generate ONLY the regular_meeting object from this transcript portion.
+This is the main city council meeting. It includes presentations, consent calendar,
+new/old business, oral communications, and adjournment.
+Return a JSON array: [ { ... } ]
+If the regular meeting content does not appear in this portion, return [].
+Start with [ and end with ]. No prose, no code fences.`
       },
       {
         label: "Other Agencies",
+        transcriptPart: part3,
+        partLabel: "Part 3 — end of recording",
         instruction: `Generate ONLY the successor_agency, housing_authority, public_financing_authority,
-and utility_authority meeting objects for whichever actually occurred tonight.
-Return a JSON array. If none occurred return [].
-Start with [ and end with ]. No prose, no code fences, no backticks.`
+and utility_authority meeting objects from this transcript portion.
+These sub-agency meetings happen near the end of the evening.
+Return a JSON array of whichever occurred: [ {...}, {...} ]
+If none appear in this portion, return [].
+Start with [ and end with ]. No prose, no code fences.`
       }
     ];
 
-    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const allMeetings = [];
+    let meetingDate = "";
 
-    for (let i = 0; i < chunks.length; i++) {
-      if (i > 0) {
-        console.log(`Waiting 30s before chunk ${i + 1} to respect rate limits…`);
-        await sleep(30000); // 30 second pause between calls
+    for (const chunk of chunks) {
+      console.log(`Calling Claude for: ${chunk.label}`);
+      const meetings = await callClaude(
+        anthropic,
+        agendaPdfB64,
+        chunk.transcriptPart,
+        chunk.partLabel,
+        chunk.instruction
+      );
+      for (const m of meetings) {
+        if (m.meeting_date && !meetingDate) meetingDate = m.meeting_date;
+        if (m.type) allMeetings.push(m); // skip empty placeholders
       }
-      const chunk = chunks[i];
-      const meetings = await callClaude(anthropic, agendaPdfB64, transcriptText, chunk.instruction);
+      console.log(`${chunk.label} done: ${meetings.length} meeting(s)`);
+    }
 
     const result = { meeting_date: meetingDate, meetings: allMeetings };
 
@@ -266,6 +311,7 @@ Start with [ and end with ]. No prose, no code fences, no backticks.`
     });
 
   } catch (err) {
+    console.error("generate error:", err);
     return new Response(JSON.stringify({ error: err.message }), {
       status: 500,
       headers: { "Content-Type": "application/json" }
