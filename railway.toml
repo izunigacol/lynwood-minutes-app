@@ -3,5 +3,5 @@ builder = "nixpacks"
 
 [deploy]
 startCommand = "node server.mjs"
-restartPolicyType = "on-failure"
+restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
