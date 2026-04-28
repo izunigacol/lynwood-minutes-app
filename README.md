@@ -1,4 +1,4 @@
-# Lynwood Minutes Generator — Netlify Deployment Guide
+# Lynwood Minutes Generator
 
 A small web app that takes a meeting transcript (`.txt`) and a short agenda
 (`.pdf`), runs them through Anthropic's Claude API, and downloads three
