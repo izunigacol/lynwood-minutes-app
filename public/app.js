@@ -47,7 +47,7 @@ window.addEventListener("DOMContentLoaded", () => {
 });
 
 // ---------------------------------------------------------------------
-// Form submit -> three Claude calls -> docx download
+// Form submit -> streaming function -> docx download
 // ---------------------------------------------------------------------
 els.form.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -65,7 +65,6 @@ els.form.addEventListener("submit", async (e) => {
     const token = await user.jwt(true);
 
     log("Uploading files…");
-    log("Generating Closed Session minutes… (this takes ~20 seconds)");
 
     const resp = await fetch("/api/generate", {
       method: "POST",
@@ -78,17 +77,56 @@ els.form.addEventListener("submit", async (e) => {
       throw new Error(`HTTP ${resp.status}: ${errText}`);
     }
 
-    const data = await resp.json();
+    log("Generating minutes — this takes about 60 seconds…");
 
-    if (data.error) {
-      throw new Error("Server error: " + data.error);
+    // Read NDJSON stream
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalJson = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let evt;
+        try { evt = JSON.parse(line); } catch { continue; }
+
+        if (evt.t === "ping") {
+          log(`Processing: ${evt.label}…`);
+        } else if (evt.t === "progress") {
+          log(`✓ ${evt.label} complete`);
+        } else if (evt.t === "final") {
+          finalJson = evt.json;
+        } else if (evt.t === "error") {
+          throw new Error(evt.message);
+        }
+      }
     }
 
-    log("All sections received. Building Word documents…");
+    if (!finalJson) {
+      throw new Error("No output received from server. Please try again.");
+    }
+
+    log("Building Word documents…");
+
+    let data;
+    try {
+      data = JSON.parse(finalJson);
+    } catch (err) {
+      offerDownload(new Blob([finalJson], { type: "text/plain" }), "raw_output.txt");
+      throw new Error("Could not parse server response as JSON");
+    }
 
     const docs = await buildAllMinutesDocs(data);
     docs.forEach(({ filename, blob }) => offerDownload(blob, filename));
-    log(`Done. ${docs.length} document(s) ready.`);
+    log(`Done! ${docs.length} document(s) ready to download.`);
 
   } catch (err) {
     log("ERROR: " + err.message);

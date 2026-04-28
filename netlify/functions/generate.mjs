@@ -23,7 +23,6 @@ items were considered. Use the transcript portion to extract precise actions, ti
 movers/seconders, and vote tallies relevant to the meeting type requested.
 
 OUTPUT FORMAT — return a JSON array (and NOTHING else) matching this schema.
-The browser will assemble formatted Word documents from this JSON.
 
 [
   {
@@ -80,7 +79,7 @@ The browser will assemble formatted Word documents from this JSON.
       { "number": "09.01",
         "title": "City Council Meeting Schedule for 2026",
         "motion": {
-          "text": "It was moved by Mayor Pro Tem Avila-Moore, seconded by Council Member Soto to approve the 2026 schedule with amendments... Motion carried by the following 5/0 roll call vote:",
+          "text": "It was moved by Mayor Pro Tem Avila-Moore, seconded by Council Member Soto to approve...",
           "ts": "02:24:31",
           "ayes": "COUNCIL MEMBERS CUELLAR, MUNOZ-GUEVARA, SOTO, MAYOR PRO TEM AVILA-MOORE AND MAYOR CAMACHO",
           "noes": "NONE", "abstain": "NONE", "absent": "NONE"
@@ -91,14 +90,10 @@ The browser will assemble formatted Word documents from this JSON.
       }
     ],
     "council_oral_communication": [
-      { "name": "Council Member Cuellar",
-        "report": "reported attending the California Contract Cities monthly board meeting on April 15, 2026.",
-        "ts": "02:28:24" }
+      { "name": "Council Member Cuellar", "report": "...", "ts": "02:28:24" }
     ],
     "staff_oral_comments": [
-      { "name": "Recreation Director Mark Flores",
-        "report": "announced that the Recreation Department, in collaboration with...",
-        "ts": "02:51:32" }
+      { "name": "Recreation Director Mark Flores", "report": "...", "ts": "02:51:32" }
     ],
     "closed_session_items": [
       { "label": "A.",
@@ -122,13 +117,13 @@ The browser will assemble formatted Word documents from this JSON.
 
 CRITICAL RULES
   - Resolution numbers: always use "RESOLUTION NO. {YEAR}.___" (with literal underscores).
-  - Roll call name lists must be ALL CAPS. Council variant uses "COUNCIL MEMBERS"; agency variants use "MEMBERS" (and "VICE CHAIR"/"CHAIR" instead of "MAYOR PRO TEM"/"MAYOR").
+  - Roll call name lists must be ALL CAPS. Council uses "COUNCIL MEMBERS"; agencies use "MEMBERS".
   - Use standard phrases: "Approved and Adopted" / "Received and Filed" / "Approved and Adopted With Noted Amendments".
-  - Always include the HH:MM:SS timestamp from the transcript next to motions, votes, and major actions.
-  - When the transcript does not clearly identify a mover or seconder, use your best inference AND set "uncertain": true on that motion field.
+  - Always include HH:MM:SS timestamps next to motions, votes, and major actions.
+  - When mover/seconder unclear, use best inference AND set "uncertain": true on that motion.
   - Output a JSON ARRAY ONLY. No prose, no markdown, no code fences, no backticks.
   - Your entire response must start with [ and end with ].
-  - If the relevant meeting did not occur in the transcript portion provided, return an empty array: []`;
+  - If the relevant meeting did not occur in this transcript portion, return [].`;
 
 function isAllowedEmail(email) {
   const list = (process.env.ALLOWED_EMAILS || "")
@@ -137,7 +132,6 @@ function isAllowedEmail(email) {
   return list.includes((email || "").toLowerCase());
 }
 
-// Split transcript into N roughly equal parts, breaking on newlines
 function splitTranscript(text, parts) {
   const chunkSize = Math.ceil(text.length / parts);
   const result = [];
@@ -146,7 +140,6 @@ function splitTranscript(text, parts) {
     if (start >= text.length) { result.push(""); continue; }
     let end = start + chunkSize;
     if (end < text.length) {
-      // Walk back to nearest newline so we don't cut mid-sentence
       while (end > start && text[end] !== "\n") end--;
     } else {
       end = text.length;
@@ -173,7 +166,7 @@ async function callClaude(anthropic, agendaPdfB64, transcriptPortion, partLabel,
         },
         {
           type: "text",
-          text: `TRANSCRIPT PORTION (${partLabel} of the full recording):\n\n${transcriptPortion}\n\n${instruction}`
+          text: `TRANSCRIPT PORTION (${partLabel}):\n\n${transcriptPortion}\n\n${instruction}`
         }
       ]
     }]
@@ -239,84 +232,96 @@ export default async (req, context) => {
   }
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  try {
-    // Split transcript into 3 portions — one per Claude call
-    const [part1, part2, part3] = splitTranscript(transcriptText, 3);
+  const [part1, part2, part3] = splitTranscript(transcriptText, 3);
 
-    console.log(`Transcript split: ${part1.length} / ${part2.length} / ${part3.length} chars`);
-
-    // Each call gets the portion of the transcript most likely to contain
-    // that meeting. Closed session is always first; agencies are always last.
-    const chunks = [
-      {
-        label: "Closed Session",
-        transcriptPart: part1,
-        partLabel: "Part 1 — beginning of recording",
-        instruction: `Generate ONLY the closed_session meeting object from this transcript portion.
+  const chunks = [
+    {
+      label: "Closed Session",
+      transcriptPart: part1,
+      partLabel: "Part 1 - beginning of recording",
+      instruction: `Generate ONLY the closed_session meeting object from this transcript portion.
 Return a JSON array: [ { ... } ]
-If closed session does not appear in this portion, return [].
+If closed session does not appear here, return [].
 Start with [ and end with ]. No prose, no code fences.`
-      },
-      {
-        label: "Regular Meeting",
-        transcriptPart: part2,
-        partLabel: "Part 2 — middle of recording",
-        instruction: `Generate ONLY the regular_meeting object from this transcript portion.
-This is the main city council meeting. It includes presentations, consent calendar,
-new/old business, oral communications, and adjournment.
+    },
+    {
+      label: "Regular Meeting",
+      transcriptPart: part2,
+      partLabel: "Part 2 - middle of recording",
+      instruction: `Generate ONLY the regular_meeting object from this transcript portion.
+Includes presentations, consent calendar, new/old business, oral communications, adjournment.
 Return a JSON array: [ { ... } ]
-If the regular meeting content does not appear in this portion, return [].
+If not present here, return [].
 Start with [ and end with ]. No prose, no code fences.`
-      },
-      {
-        label: "Other Agencies",
-        transcriptPart: part3,
-        partLabel: "Part 3 — end of recording",
-        instruction: `Generate ONLY the successor_agency, housing_authority, public_financing_authority,
-and utility_authority meeting objects from this transcript portion.
-These sub-agency meetings happen near the end of the evening.
+    },
+    {
+      label: "Other Agencies",
+      transcriptPart: part3,
+      partLabel: "Part 3 - end of recording",
+      instruction: `Generate ONLY successor_agency, housing_authority, public_financing_authority,
+and utility_authority objects from this transcript portion.
 Return a JSON array of whichever occurred: [ {...}, {...} ]
-If none appear in this portion, return [].
+If none appear here, return [].
 Start with [ and end with ]. No prose, no code fences.`
-      }
-    ];
-
-    const allMeetings = [];
-    let meetingDate = "";
-
-    for (const chunk of chunks) {
-      console.log(`Calling Claude for: ${chunk.label}`);
-      const meetings = await callClaude(
-        anthropic,
-        agendaPdfB64,
-        chunk.transcriptPart,
-        chunk.partLabel,
-        chunk.instruction
-      );
-      for (const m of meetings) {
-        if (m.meeting_date && !meetingDate) meetingDate = m.meeting_date;
-        if (m.type) allMeetings.push(m); // skip empty placeholders
-      }
-      console.log(`${chunk.label} done: ${meetings.length} meeting(s)`);
     }
+  ];
 
-    const result = { meeting_date: meetingDate, meetings: allMeetings };
+  // Stream NDJSON back — each chunk sends a progress line immediately
+  // after completing, keeping the connection alive past the 26s timeout.
+  const encoder = new TextEncoder();
 
-    return new Response(JSON.stringify(result), {
-      status: 200,
-      headers: {
-        "Content-Type": "application/json; charset=utf-8",
-        "Cache-Control": "no-store"
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj) =>
+        controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+
+      try {
+        const allMeetings = [];
+        let meetingDate = "";
+
+        for (const chunk of chunks) {
+          // Send a ping immediately so Netlify knows we're alive
+          send({ t: "ping", label: chunk.label });
+
+          const meetings = await callClaude(
+            anthropic,
+            agendaPdfB64,
+            chunk.transcriptPart,
+            chunk.partLabel,
+            chunk.instruction
+          );
+
+          for (const m of meetings) {
+            if (m.meeting_date && !meetingDate) meetingDate = m.meeting_date;
+            if (m.type) allMeetings.push(m);
+          }
+
+          // Progress update — this is what keeps the connection alive
+          send({ t: "progress", label: chunk.label, count: meetings.filter(m => m.type).length });
+        }
+
+        // All done — send final assembled JSON
+        send({
+          t: "final",
+          json: JSON.stringify({ meeting_date: meetingDate, meetings: allMeetings })
+        });
+        controller.close();
+
+      } catch (err) {
+        send({ t: "error", message: err.message });
+        controller.close();
       }
-    });
+    }
+  });
 
-  } catch (err) {
-    console.error("generate error:", err);
-    return new Response(JSON.stringify({ error: err.message }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" }
-    });
-  }
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Accel-Buffering": "no"
+    }
+  });
 };
 
 export const config = {
