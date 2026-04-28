@@ -245,13 +245,15 @@ Start with [ and end with ]. No prose, no code fences, no backticks.`
       }
     ];
 
-    for (const chunk of chunks) {
-      const meetings = await callClaude(anthropic, agendaPdfB64, transcriptText, chunk.instruction);
-      for (const m of meetings) {
-        if (m.meeting_date && !meetingDate) meetingDate = m.meeting_date;
-        allMeetings.push(m);
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+    for (let i = 0; i < chunks.length; i++) {
+      if (i > 0) {
+        console.log(`Waiting 30s before chunk ${i + 1} to respect rate limits…`);
+        await sleep(30000); // 30 second pause between calls
       }
-    }
+      const chunk = chunks[i];
+      const meetings = await callClaude(anthropic, agendaPdfB64, transcriptText, chunk.instruction);
 
     const result = { meeting_date: meetingDate, meetings: allMeetings };
 
