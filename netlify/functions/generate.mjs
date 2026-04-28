@@ -1,4 +1,6 @@
 // netlify/functions/generate.mjs
+// Requires Anthropic Tier 2 (90k tokens/min)
+// Single Claude call, full transcript, streamed response to avoid timeouts.
 import Anthropic from "@anthropic-ai/sdk";
 import { Buffer } from "node:buffer";
 
@@ -16,169 +18,126 @@ The City Council typically holds several meetings in one evening:
 Most evenings include only some of these.
 
 You will be given two attachments:
-  - A portion of transcript_with_timestamps.txt — automated transcription of the audio
+  - transcript_with_timestamps.txt — automated transcription of the audio
   - short_agenda.pdf — the agenda packet for the evening
 Use the agenda to identify which sub-meetings were held and which numbered
-items were considered. Use the transcript portion to extract precise actions, times,
-movers/seconders, and vote tallies relevant to the meeting type requested.
+items were considered. Use the transcript to extract precise actions, times,
+movers/seconders, and vote tallies.
 
-OUTPUT FORMAT — return a JSON array (and NOTHING else) matching this schema.
+OUTPUT FORMAT — return a single JSON object (and NOTHING else) matching this schema.
+The browser will assemble formatted Word documents from this JSON.
 
-[
-  {
-    "meeting_date": "Month D, YYYY",
-    "type": "closed_session | regular_meeting | successor_agency | housing_authority | public_financing_authority | utility_authority",
-    "title": "Lynwood City Council Regular Meeting Closed Session",
-    "called_to_order": { "time": "5:04 p.m.", "ts": "00:00:00" },
-    "presiding": "Mayor Camacho",
-    "agenda_certified_by": "City Clerk Quiñonez",
-    "agenda_certified_ts": "00:00:07",
-    "roll_call": {
-      "present": "COUNCIL MEMBERS CUELLAR, SOTO AND MAYOR CAMACHO",
-      "absent": "MAYOR PRO TEM AVILA-MOORE AND COUNCIL MEMBER MUNOZ-GUEVARA",
-      "ts": "00:00:14",
-      "remote_note": "Optional italic note explaining remote participation, or empty string"
-    },
-    "staff_present": "City Manager Lowenthal, City Attorney Tapia, City Clerk Quiñonez.",
-    "pledge": { "text": "led by the Lynwood Sheriff's Explorers", "ts": "00:02:50" },
-    "invocation": { "text": "offered by City Clerk Quiñonez", "ts": "00:04:34" },
-    "presentations": [
-      { "title": "Earth Day Proclamation - Divine Hustles", "summary": "...", "ts": "00:05:25" }
-    ],
-    "recess_to": [
-      { "name": "City of Lynwood as the Successor Agency to the Lynwood Redevelopment Agency",
-        "motion": "It was moved by Council Member Cuellar, seconded by Council Member Soto to recess at 7:35 p.m.",
-        "ts": "01:34:44",
-        "reconvened_at": "7:36 p.m.",
-        "reconvened_ts": "01:36:36" }
-    ],
-    "public_oral_communications_agenda": "NONE",
-    "public_oral_communications_non_agenda": "NONE",
-    "public_oral_communications_ts": "01:37:03",
-    "consent_calendar": {
-      "intro": "All matters listed under the Consent Calendar will be...",
-      "pulled_items_note": "Staff pulled item 8.3 from the Consent Calendar...",
-      "pulled_items_ts": "02:07:26",
-      "balance_motion": {
-        "text": "It was moved by Mayor Pro Tem Avila-Moore, seconded by Council Member Cuellar to balance the Consent Calendar (items 8.1, 8.2 and 8.4). Motion carried by the following 5/0 roll call vote:",
-        "ts": "02:07:42",
-        "ayes": "COUNCIL MEMBERS CUELLAR, MUNOZ-GUEVARA, SOTO, MAYOR PRO TEM AVILA-MOORE AND MAYOR CAMACHO",
-        "noes": "NONE", "abstain": "NONE", "absent": "NONE"
+{
+  "meeting_date": "Month D, YYYY",
+  "meetings": [
+    {
+      "type": "closed_session | regular_meeting | successor_agency | housing_authority | public_financing_authority | utility_authority",
+      "title": "Lynwood City Council Regular Meeting Closed Session",
+      "called_to_order": { "time": "5:04 p.m.", "ts": "00:00:00" },
+      "presiding": "Mayor Camacho",
+      "agenda_certified_by": "City Clerk Quiñonez",
+      "agenda_certified_ts": "00:00:07",
+      "roll_call": {
+        "present": "COUNCIL MEMBERS CUELLAR, SOTO AND MAYOR CAMACHO",
+        "absent": "MAYOR PRO TEM AVILA-MOORE AND COUNCIL MEMBER MUNOZ-GUEVARA",
+        "ts": "00:00:14",
+        "remote_note": "Optional italic note explaining remote participation, or empty string"
       },
-      "items": [
-        { "number": "08.01",
-          "title": "Approval of the Warrant Register",
-          "action_left": "Approved and Adopted",
-          "action_right": "RESOLUTION NO. 2026.___",
-          "entitled": "A RESOLUTION OF THE CITY COUNCIL... (in ALL CAPS)",
-          "motion": null
-        }
-      ]
-    },
-    "new_old_business": [
-      { "number": "09.01",
-        "title": "City Council Meeting Schedule for 2026",
-        "motion": {
-          "text": "It was moved by Mayor Pro Tem Avila-Moore, seconded by Council Member Soto to approve...",
-          "ts": "02:24:31",
+      "staff_present": "City Manager Lowenthal, City Attorney Tapia, City Clerk Quiñonez.",
+      "pledge": { "text": "led by the Lynwood Sheriff's Explorers", "ts": "00:02:50" },
+      "invocation": { "text": "offered by City Clerk Quiñonez", "ts": "00:04:34" },
+      "presentations": [
+        { "title": "Earth Day Proclamation - Divine Hustles", "summary": "...", "ts": "00:05:25" }
+      ],
+      "recess_to": [
+        { "name": "City of Lynwood as the Successor Agency to the Lynwood Redevelopment Agency",
+          "motion": "It was moved by Council Member Cuellar, seconded by Council Member Soto to recess at 7:35 p.m.",
+          "ts": "01:34:44",
+          "reconvened_at": "7:36 p.m.",
+          "reconvened_ts": "01:36:36" }
+      ],
+      "public_oral_communications_agenda": "NONE",
+      "public_oral_communications_non_agenda": "NONE",
+      "public_oral_communications_ts": "01:37:03",
+      "consent_calendar": {
+        "intro": "All matters listed under the Consent Calendar will be...",
+        "pulled_items_note": "Staff pulled item 8.3 from the Consent Calendar...",
+        "pulled_items_ts": "02:07:26",
+        "balance_motion": {
+          "text": "It was moved by Mayor Pro Tem Avila-Moore, seconded by Council Member Cuellar to balance the Consent Calendar (items 8.1, 8.2 and 8.4). Motion carried by the following 5/0 roll call vote:",
+          "ts": "02:07:42",
           "ayes": "COUNCIL MEMBERS CUELLAR, MUNOZ-GUEVARA, SOTO, MAYOR PRO TEM AVILA-MOORE AND MAYOR CAMACHO",
           "noes": "NONE", "abstain": "NONE", "absent": "NONE"
         },
-        "action_left": "Approved and Adopted With Noted Amendments",
-        "action_right": "RESOLUTION NO. 2026.___",
-        "entitled": "A RESOLUTION..."
+        "items": [
+          { "number": "08.01",
+            "title": "Approval of the Warrant Register",
+            "action_left": "Approved and Adopted",
+            "action_right": "RESOLUTION NO. 2026.___",
+            "entitled": "A RESOLUTION OF THE CITY COUNCIL... (in ALL CAPS)",
+            "motion": null
+          }
+        ]
+      },
+      "new_old_business": [
+        { "number": "09.01",
+          "title": "City Council Meeting Schedule for 2026",
+          "motion": {
+            "text": "It was moved by Mayor Pro Tem Avila-Moore, seconded by Council Member Soto to approve the 2026 schedule with amendments... Motion carried by the following 5/0 roll call vote:",
+            "ts": "02:24:31",
+            "ayes": "COUNCIL MEMBERS CUELLAR, MUNOZ-GUEVARA, SOTO, MAYOR PRO TEM AVILA-MOORE AND MAYOR CAMACHO",
+            "noes": "NONE", "abstain": "NONE", "absent": "NONE"
+          },
+          "action_left": "Approved and Adopted With Noted Amendments",
+          "action_right": "RESOLUTION NO. 2026.___",
+          "entitled": "A RESOLUTION..."
+        }
+      ],
+      "council_oral_communication": [
+        { "name": "Council Member Cuellar",
+          "report": "reported attending the California Contract Cities monthly board meeting on April 15, 2026.",
+          "ts": "02:28:24" }
+      ],
+      "staff_oral_comments": [
+        { "name": "Recreation Director Mark Flores",
+          "report": "announced that the Recreation Department, in collaboration with...",
+          "ts": "02:51:32" }
+      ],
+      "closed_session_items": [
+        { "label": "A.",
+          "code_section": "Government Code Section 54956.9(d)(1)",
+          "type": "CONFERENCE WITH LEGAL COUNSEL - EXISTING LITIGATION",
+          "details": "Case Name: Castellanos v. City of Lynwood" }
+      ],
+      "report_out": {
+        "text": "With Council Members ... being present, staff made a presentation, City Council provided direction, and there was no reportable action.",
+        "ts": "00:01:43",
+        "reconvened_time": "6:01 p.m."
+      },
+      "adjournment": {
+        "text": "the meeting was adjourned in memory of Mr. Jesus Lopez.",
+        "time": "8:56 p.m.",
+        "ts": "02:56:27",
+        "motion": "It was moved by Council Member Soto, seconded by Mayor Pro Tem Avila-Moore..."
       }
-    ],
-    "council_oral_communication": [
-      { "name": "Council Member Cuellar", "report": "...", "ts": "02:28:24" }
-    ],
-    "staff_oral_comments": [
-      { "name": "Recreation Director Mark Flores", "report": "...", "ts": "02:51:32" }
-    ],
-    "closed_session_items": [
-      { "label": "A.",
-        "code_section": "Government Code Section 54956.9(d)(1)",
-        "type": "CONFERENCE WITH LEGAL COUNSEL - EXISTING LITIGATION",
-        "details": "Case Name: Castellanos v. City of Lynwood" }
-    ],
-    "report_out": {
-      "text": "With Council Members ... being present, staff made a presentation, City Council provided direction, and there was no reportable action.",
-      "ts": "00:01:43",
-      "reconvened_time": "6:01 p.m."
-    },
-    "adjournment": {
-      "text": "the meeting was adjourned in memory of Mr. Jesus Lopez.",
-      "time": "8:56 p.m.",
-      "ts": "02:56:27",
-      "motion": "It was moved by Council Member Soto, seconded by Mayor Pro Tem Avila-Moore..."
     }
-  }
-]
+  ]
+}
 
 CRITICAL RULES
   - Resolution numbers: always use "RESOLUTION NO. {YEAR}.___" (with literal underscores).
-  - Roll call name lists must be ALL CAPS. Council uses "COUNCIL MEMBERS"; agencies use "MEMBERS".
+  - Roll call name lists must be ALL CAPS. Council uses "COUNCIL MEMBERS"; agencies use "MEMBERS" (and "VICE CHAIR"/"CHAIR" instead of "MAYOR PRO TEM"/"MAYOR").
   - Use standard phrases: "Approved and Adopted" / "Received and Filed" / "Approved and Adopted With Noted Amendments".
   - Always include HH:MM:SS timestamps next to motions, votes, and major actions.
   - When mover/seconder unclear, use best inference AND set "uncertain": true on that motion.
-  - Output a JSON ARRAY ONLY. No prose, no markdown, no code fences, no backticks.
-  - Your entire response must start with [ and end with ].
-  - If the relevant meeting did not occur in this transcript portion, return [].`;
+  - Output JSON ONLY. No prose, no markdown, no code fences, no backticks.
+  - Your entire response must start with { and end with }.`;
 
 function isAllowedEmail(email) {
   const list = (process.env.ALLOWED_EMAILS || "")
     .split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
   if (list.length === 0) return false;
   return list.includes((email || "").toLowerCase());
-}
-
-function splitTranscript(text, parts) {
-  const chunkSize = Math.ceil(text.length / parts);
-  const result = [];
-  let start = 0;
-  for (let i = 0; i < parts; i++) {
-    if (start >= text.length) { result.push(""); continue; }
-    let end = start + chunkSize;
-    if (end < text.length) {
-      while (end > start && text[end] !== "\n") end--;
-    } else {
-      end = text.length;
-    }
-    result.push(text.slice(start, end).trim());
-    start = end + 1;
-  }
-  return result;
-}
-
-async function callClaude(anthropic, agendaPdfB64, transcriptPortion, partLabel, instruction) {
-  const result = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: 12000,
-    system: SYSTEM_PROMPT,
-    messages: [{
-      role: "user",
-      content: [
-        {
-          type: "document",
-          source: { type: "base64", media_type: "application/pdf", data: agendaPdfB64 },
-          title: "short_agenda.pdf",
-          context: "Agenda packet for the meeting evening."
-        },
-        {
-          type: "text",
-          text: `TRANSCRIPT PORTION (${partLabel}):\n\n${transcriptPortion}\n\n${instruction}`
-        }
-      ]
-    }]
-  });
-
-  const raw = (result.content[0]?.text ?? "").trim()
-    .replace(/^```(?:json)?\s*\n?/i, "")
-    .replace(/\n?```\s*$/i, "")
-    .trim();
-
-  const parsed = JSON.parse(raw);
-  return Array.isArray(parsed) ? parsed : [parsed];
 }
 
 export default async (req, context) => {
@@ -230,44 +189,12 @@ export default async (req, context) => {
   if (!process.env.ANTHROPIC_API_KEY) {
     return new Response("Server is missing ANTHROPIC_API_KEY.", { status: 500 });
   }
+
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  const [part1, part2, part3] = splitTranscript(transcriptText, 3);
-
-  const chunks = [
-    {
-      label: "Closed Session",
-      transcriptPart: part1,
-      partLabel: "Part 1 - beginning of recording",
-      instruction: `Generate ONLY the closed_session meeting object from this transcript portion.
-Return a JSON array: [ { ... } ]
-If closed session does not appear here, return [].
-Start with [ and end with ]. No prose, no code fences.`
-    },
-    {
-      label: "Regular Meeting",
-      transcriptPart: part2,
-      partLabel: "Part 2 - middle of recording",
-      instruction: `Generate ONLY the regular_meeting object from this transcript portion.
-Includes presentations, consent calendar, new/old business, oral communications, adjournment.
-Return a JSON array: [ { ... } ]
-If not present here, return [].
-Start with [ and end with ]. No prose, no code fences.`
-    },
-    {
-      label: "Other Agencies",
-      transcriptPart: part3,
-      partLabel: "Part 3 - end of recording",
-      instruction: `Generate ONLY successor_agency, housing_authority, public_financing_authority,
-and utility_authority objects from this transcript portion.
-Return a JSON array of whichever occurred: [ {...}, {...} ]
-If none appear here, return [].
-Start with [ and end with ]. No prose, no code fences.`
-    }
-  ];
-
-  // Stream NDJSON back — each chunk sends a progress line immediately
-  // after completing, keeping the connection alive past the 26s timeout.
+  // ---- Stream Claude response back to browser --------------------
+  // Streaming keeps the Netlify connection alive during the full response.
+  // The browser accumulates text deltas then parses the complete JSON at the end.
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -276,35 +203,51 @@ Start with [ and end with ]. No prose, no code fences.`
         controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
 
       try {
-        const allMeetings = [];
-        let meetingDate = "";
+        send({ t: "ping", message: "Connected. Sending to Claude…" });
 
-        for (const chunk of chunks) {
-          // Send a ping immediately so Netlify knows we're alive
-          send({ t: "ping", label: chunk.label });
+        let fullText = "";
 
-          const meetings = await callClaude(
-            anthropic,
-            agendaPdfB64,
-            chunk.transcriptPart,
-            chunk.partLabel,
-            chunk.instruction
-          );
+        const claudeStream = anthropic.messages.stream({
+          model: MODEL,
+          max_tokens: 16000,
+          system: SYSTEM_PROMPT,
+          messages: [{
+            role: "user",
+            content: [
+              {
+                type: "document",
+                source: {
+                  type: "base64",
+                  media_type: "application/pdf",
+                  data: agendaPdfB64
+                },
+                title: "short_agenda.pdf",
+                context: "Agenda packet for the meeting evening."
+              },
+              {
+                type: "text",
+                text: `transcript_with_timestamps.txt:\n\n${transcriptText}\n\nGenerate the JSON now.`
+              }
+            ]
+          }]
+        });
 
-          for (const m of meetings) {
-            if (m.meeting_date && !meetingDate) meetingDate = m.meeting_date;
-            if (m.type) allMeetings.push(m);
+        // Forward each text chunk as it arrives — this is what keeps
+        // the Netlify connection alive and shows progress in the browser
+        for await (const event of claudeStream) {
+          if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
+            fullText += event.delta.text;
+            send({ t: "delta", text: event.delta.text });
           }
-
-          // Progress update — this is what keeps the connection alive
-          send({ t: "progress", label: chunk.label, count: meetings.filter(m => m.type).length });
         }
 
-        // All done — send final assembled JSON
-        send({
-          t: "final",
-          json: JSON.stringify({ meeting_date: meetingDate, meetings: allMeetings })
-        });
+        // Strip any accidental code fences and send final assembled JSON
+        const cleaned = fullText.trim()
+          .replace(/^```(?:json)?\s*\n?/i, "")
+          .replace(/\n?```\s*$/i, "")
+          .trim();
+
+        send({ t: "final", json: cleaned });
         controller.close();
 
       } catch (err) {
@@ -324,6 +267,7 @@ Start with [ and end with ]. No prose, no code fences.`
   });
 };
 
+// MUST be outside the handler
 export const config = {
   path: "/.netlify/functions/generate"
 };

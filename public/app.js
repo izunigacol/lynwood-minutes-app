@@ -47,7 +47,7 @@ window.addEventListener("DOMContentLoaded", () => {
 });
 
 // ---------------------------------------------------------------------
-// Form submit -> streaming function -> docx download
+// Form submit -> stream -> build docs
 // ---------------------------------------------------------------------
 els.form.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -77,13 +77,12 @@ els.form.addEventListener("submit", async (e) => {
       throw new Error(`HTTP ${resp.status}: ${errText}`);
     }
 
-    log("Generating minutes — this takes about 60 seconds…");
-
     // Read NDJSON stream
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let finalJson = null;
+    let charsReceived = 0;
 
     while (true) {
       const { value, done } = await reader.read();
@@ -99,11 +98,16 @@ els.form.addEventListener("submit", async (e) => {
         try { evt = JSON.parse(line); } catch { continue; }
 
         if (evt.t === "ping") {
-          log(`Processing: ${evt.label}…`);
-        } else if (evt.t === "progress") {
-          log(`✓ ${evt.label} complete`);
+          log(evt.message);
+        } else if (evt.t === "delta") {
+          charsReceived += (evt.text || "").length;
+          // Update progress every ~500 chars
+          if (charsReceived % 500 < 50) {
+            log(`Receiving… ${charsReceived.toLocaleString()} characters`);
+          }
         } else if (evt.t === "final") {
           finalJson = evt.json;
+          log(`Complete. ${charsReceived.toLocaleString()} characters received.`);
         } else if (evt.t === "error") {
           throw new Error(evt.message);
         }
@@ -121,7 +125,7 @@ els.form.addEventListener("submit", async (e) => {
       data = JSON.parse(finalJson);
     } catch (err) {
       offerDownload(new Blob([finalJson], { type: "text/plain" }), "raw_output.txt");
-      throw new Error("Could not parse server response as JSON");
+      throw new Error("Could not parse response as JSON — raw output saved for review.");
     }
 
     const docs = await buildAllMinutesDocs(data);
@@ -137,7 +141,15 @@ els.form.addEventListener("submit", async (e) => {
 });
 
 function log(msg) {
-  els.status.textContent += msg + "\n";
+  // Overwrite progress lines, append status lines
+  const lines = els.status.textContent.split("\n").filter(Boolean);
+  const lastLine = lines[lines.length - 1] || "";
+  if (lastLine.startsWith("Receiving…") && msg.startsWith("Receiving…")) {
+    lines[lines.length - 1] = msg; // update in place
+  } else {
+    lines.push(msg);
+  }
+  els.status.textContent = lines.join("\n") + "\n";
   els.status.scrollTop = els.status.scrollHeight;
 }
 
