@@ -209,7 +209,7 @@ export default async (req, context) => {
 
         const claudeStream = anthropic.messages.stream({
           model: MODEL,
-          max_tokens: 16000,
+          max_tokens: 8000,
           system: SYSTEM_PROMPT,
           messages: [{
             role: "user",
