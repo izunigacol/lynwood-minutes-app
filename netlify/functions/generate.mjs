@@ -136,6 +136,37 @@ function isAllowedEmail(email) {
   return list.includes((email || "").toLowerCase());
 }
 
+async function callClaude(anthropic, agendaPdfB64, transcriptText, instruction) {
+  const result = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: 16000,
+    system: SYSTEM_PROMPT,
+    messages: [{
+      role: "user",
+      content: [
+        {
+          type: "document",
+          source: { type: "base64", media_type: "application/pdf", data: agendaPdfB64 },
+          title: "short_agenda.pdf",
+          context: "Agenda packet for the meeting evening."
+        },
+        {
+          type: "text",
+          text: `transcript_with_timestamps.txt:\n\n${transcriptText}\n\n${instruction}`
+        }
+      ]
+    }]
+  });
+
+  const raw = (result.content[0]?.text ?? "").trim()
+    .replace(/^```(?:json)?\s*\n?/i, "")
+    .replace(/\n?```\s*$/i, "")
+    .trim();
+
+  const parsed = JSON.parse(raw);
+  return Array.isArray(parsed) ? parsed : [parsed];
+}
+
 export default async (req, context) => {
 
   // ---- Auth gate --------------------------------------------------
@@ -182,120 +213,64 @@ export default async (req, context) => {
     return new Response("Could not read uploaded files: " + err.message, { status: 400 });
   }
 
-  // ---- API key check ----------------------------------------------
   if (!process.env.ANTHROPIC_API_KEY) {
     return new Response("Server is missing ANTHROPIC_API_KEY.", { status: 500 });
   }
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  // ---- Three chunked Claude calls to avoid token limits -----------
-  const meetingChunks = [
-    {
-      label: "Closed Session",
-      instruction: `Generate ONLY the closed_session meeting object.
-Return a JSON array with exactly one object: [ { ...closed session data... } ]
-Your response must start with [ and end with ]. No prose, no code fences, no backticks.`
-    },
-    {
-      label: "Regular Meeting",
-      instruction: `Generate ONLY the regular_meeting object.
-Return a JSON array with exactly one object: [ { ...regular meeting data... } ]
-Your response must start with [ and end with ]. No prose, no code fences, no backticks.`
-    },
-    {
-      label: "Other Agencies",
-      instruction: `Generate ONLY the successor_agency, housing_authority, public_financing_authority,
+  // ---- Three sequential Claude calls ------------------------------
+  try {
+    const allMeetings = [];
+    let meetingDate = "";
+
+    const chunks = [
+      {
+        label: "Closed Session",
+        instruction: `Generate ONLY the closed_session meeting object.
+Return a JSON array with exactly one object: [ { ... } ]
+Start with [ and end with ]. No prose, no code fences, no backticks.`
+      },
+      {
+        label: "Regular Meeting",
+        instruction: `Generate ONLY the regular_meeting object.
+Return a JSON array with exactly one object: [ { ... } ]
+Start with [ and end with ]. No prose, no code fences, no backticks.`
+      },
+      {
+        label: "Other Agencies",
+        instruction: `Generate ONLY the successor_agency, housing_authority, public_financing_authority,
 and utility_authority meeting objects for whichever actually occurred tonight.
-Return a JSON array: [ {...}, {...} ]
-If none occurred, return an empty array: []
-Your response must start with [ and end with ]. No prose, no code fences, no backticks.`
-    }
-  ];
+Return a JSON array. If none occurred return [].
+Start with [ and end with ]. No prose, no code fences, no backticks.`
+      }
+    ];
 
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      const send = (obj) =>
-        controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
-
-      try {
-        const allMeetings = [];
-        let meetingDate = "";
-
-        for (const chunk of meetingChunks) {
-          send({ t: "heartbeat", label: chunk.label });
-
-          const chunkContent = [
-            {
-              type: "document",
-              source: { type: "base64", media_type: "application/pdf", data: agendaPdfB64 },
-              title: "short_agenda.pdf",
-              context: "Agenda packet for the meeting evening."
-            },
-            {
-              type: "text",
-              text: `transcript_with_timestamps.txt:\n\n${transcriptText}\n\n${chunk.instruction}`
-            }
-          ];
-
-          const result = await anthropic.messages.create({
-            model: MODEL,
-            max_tokens: 16000,
-            system: SYSTEM_PROMPT,
-            messages: [{ role: "user", content: chunkContent }]
-          });
-
-          const raw = (result.content[0]?.text ?? "").trim()
-            .replace(/^```(?:json)?\s*\n?/i, "")
-            .replace(/\n?```\s*$/i, "")
-            .trim();
-
-          let parsed;
-          try {
-            parsed = JSON.parse(raw);
-            if (!Array.isArray(parsed)) parsed = [parsed];
-          } catch (parseErr) {
-            send({ t: "error", message: `Failed to parse ${chunk.label}: ${parseErr.message} — Raw start: ${raw.slice(0, 300)}` });
-            controller.close();
-            return;
-          }
-
-          for (const item of parsed) {
-            if (item.meeting_date && !meetingDate) {
-              meetingDate = item.meeting_date;
-            }
-            allMeetings.push(item);
-          }
-
-          send({ t: "progress", label: chunk.label, count: parsed.length });
-        }
-
-        // Send final assembled JSON as its own dedicated event
-        send({
-          t: "final",
-          json: JSON.stringify({ meeting_date: meetingDate, meetings: allMeetings })
-        });
-        send({ t: "done" });
-        controller.close();
-
-      } catch (err) {
-        send({ t: "error", message: err.message });
-        controller.close();
+    for (const chunk of chunks) {
+      const meetings = await callClaude(anthropic, agendaPdfB64, transcriptText, chunk.instruction);
+      for (const m of meetings) {
+        if (m.meeting_date && !meetingDate) meetingDate = m.meeting_date;
+        allMeetings.push(m);
       }
     }
-  });
 
-  return new Response(stream, {
-    status: 200,
-    headers: {
-      "Content-Type": "application/x-ndjson; charset=utf-8",
-      "Cache-Control": "no-store",
-      "X-Accel-Buffering": "no"
-    }
-  });
+    const result = { meeting_date: meetingDate, meetings: allMeetings };
+
+    return new Response(JSON.stringify(result), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store"
+      }
+    });
+
+  } catch (err) {
+    return new Response(JSON.stringify({ error: err.message }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
 };
 
-// MUST be outside the handler
 export const config = {
   path: "/.netlify/functions/generate"
 };

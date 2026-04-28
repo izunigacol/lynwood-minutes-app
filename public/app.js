@@ -1,9 +1,4 @@
 // public/app.js
-// =====================================================================
-// Front-end controller: auth gate, upload, streaming consumption,
-// then docx assembly via the shared docx-builder module.
-// =====================================================================
-
 import { buildAllMinutesDocs } from "/docx-builder.js";
 
 const $ = (sel) => document.querySelector(sel);
@@ -52,16 +47,13 @@ window.addEventListener("DOMContentLoaded", () => {
 });
 
 // ---------------------------------------------------------------------
-// Form submit -> chunked function calls -> docx download
+// Form submit -> three Claude calls -> docx download
 // ---------------------------------------------------------------------
 els.form.addEventListener("submit", async (e) => {
   e.preventDefault();
 
   const user = netlifyIdentity?.currentUser?.();
-  if (!user) {
-    log("ERROR: not signed in");
-    return;
-  }
+  if (!user) { log("ERROR: not signed in"); return; }
 
   els.runBtn.disabled = true;
   els.status.classList.remove("hidden");
@@ -72,7 +64,8 @@ els.form.addEventListener("submit", async (e) => {
     const fd = new FormData(els.form);
     const token = await user.jwt(true);
 
-    log("Uploading files and starting generation…");
+    log("Uploading files…");
+    log("Generating Closed Session minutes… (this takes ~20 seconds)");
 
     const resp = await fetch("/api/generate", {
       method: "POST",
@@ -85,53 +78,13 @@ els.form.addEventListener("submit", async (e) => {
       throw new Error(`HTTP ${resp.status}: ${errText}`);
     }
 
-    // Stream consumption: NDJSON lines from the function
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let finalJson = null;
+    const data = await resp.json();
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      const lines = buffer.split("\n");
-      buffer = lines.pop(); // last partial line stays in buffer
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        let evt;
-        try { evt = JSON.parse(line); } catch { continue; }
-
-        if (evt.t === "heartbeat") {
-          log(`Processing: ${evt.label}…`);
-        } else if (evt.t === "progress") {
-          log(`✓ ${evt.label} complete (${evt.count} meeting(s))`);
-        } else if (evt.t === "final") {
-          // This is the complete assembled JSON from all chunks
-          finalJson = evt.json;
-          log("All sections received. Building Word documents…");
-        } else if (evt.t === "done") {
-          log("Stream complete.");
-        } else if (evt.t === "error") {
-          throw new Error("Function error: " + evt.message);
-        }
-      }
+    if (data.error) {
+      throw new Error("Server error: " + data.error);
     }
 
-    if (!finalJson) {
-      throw new Error("No final JSON received from server. Check function logs.");
-    }
-
-    let data;
-    try {
-      data = JSON.parse(finalJson);
-    } catch (err) {
-      log("ERROR: Could not parse assembled JSON. Saving raw for review.");
-      offerDownload(new Blob([finalJson], { type: "text/plain" }), "Claude_raw_output.txt");
-      throw err;
-    }
+    log("All sections received. Building Word documents…");
 
     const docs = await buildAllMinutesDocs(data);
     docs.forEach(({ filename, blob }) => offerDownload(blob, filename));
